@@ -8,22 +8,37 @@ import json
 import codecs
 import sys
 import os
+import platform
 
-if sys.argv[1] == 'build':
+if sys.argv[1] in ('build', 'bdist_msi', 'bdist_mac', 'bdist_dmg'):
     from cx_Freeze import setup, Executable  # noqa
 
     cxfreeze_options = {
         'options': {
-            'build_exe': {'includes': ['numpy.core._methods',
-                                       'numpy.lib.format',
-                                       'pyqtgraph.debug',
-                                       'pyqtgraph.ThreadsafeTimer',
-                                       ],
-                          'packages': ['asyncio'],
-                          'excludes': ['tkinter']}
+            'build_exe': {
+                'includes': ['numpy.core._methods',
+                             'numpy.lib.format',
+                             'pyqtgraph.debug',
+                             'pyqtgraph.ThreadsafeTimer',
+                             'vispy.ext._bundled.six',
+                             'vispy.app.backends._pyqt5',
+                             ],
+                'include_files': [],
+                'packages': ['asyncio'],
+                'excludes': ['tkinter']
+            },
+            'bdist_mac': {
+                'iconfile': 'icon-256.icns',
+                'bundle_name': 'Crazyflie client',
+            },
         },
         'executables': [Executable("bin/cfclient", icon='bitcraze.ico')],
     }
+    if platform.system() == 'Darwin':
+        cxfreeze_options['options']['build_exe']['include_files'] = [
+                ('/usr/local/lib/libusb-1.0.0.dylib', 'libusb.dylib'),
+                ('/usr/local/lib/libSDL2-2.0.0.dylib', 'libSDL2.dylib'),
+            ]
 else:
     cxfreeze_options = {}
 # except:
@@ -64,7 +79,7 @@ VERSION = get_version()
 if not VERSION and not os.path.isfile('src/cfclient/version.json'):
     sys.stderr.write("Git is required to install from source.\n" +
                      "Please clone the project with Git or use one of the\n" +
-                     "release pachages (either from pip or a binary build).\n")
+                     "release packages (either from pip or a binary build).\n")
     raise Exception("Git required.")
 
 if not VERSION:
@@ -77,9 +92,24 @@ else:
 platform_requires = []
 platform_dev_requires = []
 if sys.platform == 'win32' or sys.platform == 'darwin':
-    platform_requires = ['pysdl2']
+    platform_requires = ['pysdl2~=0.9.6']
 if sys.platform == 'win32':
-    platform_dev_requires = ['cx_freeze', 'jinja2']
+    platform_dev_requires = ['cx_freeze==5.1.1', 'jinja2==2.10.3']
+
+# Only install the latest pyqt for Linux and Mac
+# On Windows, the latest version that does not have performance problems
+# is 5.12
+if sys.platform == 'win32':
+    platform_requires += ['pyqt5~=5.12.0']
+else:
+    platform_requires += ['pyqt5~=5.15.0']
+
+# Current version of vispy do not support Python 3.9
+# Getting Vispy form git if running in python 3.9
+if sys.version_info[:2] == (3, 9):
+    platform_requires += ['vispy @ git+https://github.com/vispy/vispy@74d9461d']
+else:
+    platform_requires += ['vispy~=0.6.5']
 
 package_data = {
     'cfclient.ui':  relative(glob('src/cfclient/ui/*.ui')),
@@ -90,8 +120,8 @@ package_data = {
     'cfclient':  relative(glob('src/cfclient/configs/*.json'), 'configs/') +  # noqa
                  relative(glob('src/cfclient/configs/input/*.json'), 'configs/input/') +  # noqa
                  relative(glob('src/cfclient/configs/log/*.json'), 'configs/log/') +  # noqa
-                 relative(glob('src/cfclient/resources/*'), 'resources/') +
-                 relative(glob('src/cfclient/*.png')),
+                 relative(glob('src/cfclient/resources/*'), 'resources/') +  # noqa
+                 relative(glob('src/cfclient/ui/icons/*.png'), 'ui/icons/'),  # noqa
     '': ['README.md']
 }
 data_files = [
@@ -127,21 +157,20 @@ setup(
         ],
     },
 
-    install_requires=platform_requires + ['cflib>=0.1.7',
-                                          'appdirs>=1.4.0',
-                                          'pyzmq',
-                                          'pyqtgraph>=0.10',
-                                          'PyYAML',
-                                          'quamash==0.6.1',
-                                          'qtm>=2.0.2'],
+    install_requires=platform_requires + ['cflib~=0.1.12',
+                                          'appdirs~=1.4.0',
+                                          'pyzmq~=19.0',
+                                          'pyqtgraph~=0.11',
+                                          'PyYAML~=5.3',
+                                          'quamash~=0.6.1',
+                                          'qtm~=2.0.2',
+                                          'numpy~=1.19.2'],
 
-    # List of dev and qt dependencies
-    # Pyqt5 5.9.2 seems to be the last version to work on Windows 8.1
+    # List of dev dependencies
     # You can install them by running
-    # $ pip install -e .[dev,qt5]
+    # $ pip install -e .[dev]
     extras_require={
         'dev': platform_dev_requires + [],
-        'qt5': ['PyQt5==5.9.2']
     },
 
     package_data=package_data,
