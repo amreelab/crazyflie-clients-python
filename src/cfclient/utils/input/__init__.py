@@ -117,7 +117,7 @@ class JoystickReader(object):
 
         self._input_map = None
 
-        if Config().get("flightmode") is "Normal":
+        if Config().get("flightmode") == "Normal":
             self.max_yaw_rate = Config().get("normal_max_yaw")
             self.max_rp_angle = Config().get("normal_max_rp")
             # Values are stored at %, so use the functions to set the values
@@ -172,6 +172,7 @@ class JoystickReader(object):
         self.hover_input_updated = Caller()
         self.rp_trim_updated = Caller()
         self.emergency_stop_updated = Caller()
+        self.arm_updated = Caller()
         self.device_discovery = Caller()
         self.device_error = Caller()
         self.assisted_control_updated = Caller()
@@ -386,8 +387,8 @@ class JoystickReader(object):
                                 d.limit_rp = True
                     if self._assisted_control == \
                             JoystickReader.ASSISTED_CONTROL_ALTHOLD:
-                            self.assisted_control_updated.call(
-                                                data.assistedControl)
+                        self.assisted_control_updated.call(
+                                            data.assistedControl)
                     if ((self._assisted_control ==
                             JoystickReader.ASSISTED_CONTROL_HEIGHTHOLD) or
                             (self._assisted_control ==
@@ -419,7 +420,12 @@ class JoystickReader(object):
                     except Exception as e:
                         logger.warning("Exception while doing callback from"
                                        "input-device for estop: {}".format(e))
-
+                if data.toggled.arm and data._prev_btn_values["arm"]:
+                    try:
+                        self.arm_updated.call(data.arm)
+                    except Exception as e:
+                        logger.warning("Exception while doing callback from"
+                                       "input-device for arm: {}".format(e))
                 if data.toggled.alt1:
                     try:
                         self.alt1_updated.call(data.alt1)
@@ -447,9 +453,9 @@ class JoystickReader(object):
                     vx = data.roll
                     vy = data.pitch
                     vz = data.thrust
-                    yawrate = data.yaw
+                    yawrate = -data.yaw
                     # The odd use of vx and vy is to map forward on the
-                    # physical joystick to positiv X-axis
+                    # physical joystick to positive X-axis
                     self.assisted_input_updated.call(vy, -vx, vz, yawrate)
                 elif self._assisted_control == \
                         JoystickReader.ASSISTED_CONTROL_HOVER \
@@ -459,7 +465,7 @@ class JoystickReader(object):
 
                     # Scale thrust to a value between -1.0 to 1.0
                     vz = (data.thrust - 32767) / 32767.0
-                    # Integrate velosity setpoint
+                    # Integrate velocity setpoint
                     self._target_height += vz * INPUT_READ_PERIOD
                     # Cap target height
                     if self._target_height > self._hover_max_height:
@@ -467,9 +473,9 @@ class JoystickReader(object):
                     if self._target_height < MIN_HOVER_HEIGHT:
                         self._target_height = MIN_HOVER_HEIGHT
 
-                    yawrate = data.yaw
+                    yawrate = -data.yaw
                     # The odd use of vx and vy is to map forward on the
-                    # physical joystick to positiv X-axis
+                    # physical joystick to positive X-axis
                     self.hover_input_updated.call(vy, -vx, yawrate,
                                                   self._target_height)
                 else:
@@ -493,10 +499,10 @@ class JoystickReader(object):
                             and data.assistedControl:
                         roll = data.roll + self.trim_roll
                         pitch = data.pitch + self.trim_pitch
-                        yawrate = data.yaw
+                        yawrate = -data.yaw
                         # Scale thrust to a value between -1.0 to 1.0
                         vz = (data.thrust - 32767) / 32767.0
-                        # Integrate velosity setpoint
+                        # Integrate velocity setpoint
                         self._target_height += vz * INPUT_READ_PERIOD
                         # Cap target height
                         if self._target_height > self._hover_max_height:

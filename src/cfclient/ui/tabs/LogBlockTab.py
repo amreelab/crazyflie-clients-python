@@ -7,7 +7,7 @@
 #  +------+    / /_/ / / /_/ /__/ /  / /_/ / / /_/  __/
 #   ||  ||    /_____/_/\__/\___/_/   \__,_/ /___/\___/
 #
-#  Copyright (C) 2013 Bitcraze AB
+#  Copyright (C) 2013-2026 Bitcraze AB
 #
 #  Crazyflie Nano Quadcopter Client
 #
@@ -31,25 +31,24 @@ This tab shows all log blocks that are registered and can be used to start the
 logging and also to write the logging data to file.
 """
 
-from PyQt5 import uic
-from PyQt5.QtCore import Qt, pyqtSignal, QSysInfo
+from PyQt6 import uic
+from PyQt6.QtCore import Qt, pyqtSignal
 
 import cfclient
-from cfclient.ui.tab import Tab
+from cfclient.ui.tab_toolbox import TabToolbox
 
 import logging
 
-from PyQt5.QtWidgets import QApplication, QStyledItemDelegate
-from PyQt5.QtWidgets import QAbstractItemView, QStyleOptionButton, QStyle
-from PyQt5.QtCore import QAbstractItemModel, QModelIndex
+from PyQt6.QtWidgets import QApplication, QStyledItemDelegate
+from PyQt6.QtWidgets import QAbstractItemView, QStyleOptionButton, QStyle
+from PyQt6.QtCore import QAbstractItemModel, QModelIndex
 
 from cfclient.utils.logdatawriter import LogWriter
 
 __author__ = 'Bitcraze AB'
 __all__ = ['LogBlockTab']
 
-logblock_tab_class = uic.loadUiType(
-    cfclient.module_path + "/ui/tabs/logBlockTab.ui")[0]
+logblock_tab_class = uic.loadUiType(cfclient.module_path + "/ui/tabs/logBlockTab.ui")[0]
 
 logger = logging.getLogger(__name__)
 
@@ -176,6 +175,7 @@ class LogBlockModel(QAbstractItemModel):
     def add_block(self, block, connected_ts):
         self._nodes.append(LogBlockItem(block, self, connected_ts))
         self.layoutChanged.emit()
+        self._nodes.sort(key=lambda conf: conf.name.lower())
 
     def refresh(self):
         """Force a refresh of the view though the model"""
@@ -220,7 +220,7 @@ class LogBlockModel(QAbstractItemModel):
 
     def headerData(self, section, orientation, role):
         """Re-implemented method to get the headers"""
-        if role == Qt.DisplayRole:
+        if role == Qt.ItemDataRole.DisplayRole:
             return self._column_headers[section]
 
     def rowCount(self, parent):
@@ -250,20 +250,20 @@ class LogBlockModel(QAbstractItemModel):
         node = index.internalPointer()
         parent = node.parent
         if parent:
-            if role == Qt.DisplayRole and index.column() == 5:
+            if role == Qt.ItemDataRole.DisplayRole and index.column() == 5:
                 return node.name
-        elif not parent and role == Qt.DisplayRole and index.column() == 5:
+        elif not parent and role == Qt.ItemDataRole.DisplayRole and index.column() == 5:
             return node.var_list()
-        elif not parent and role == Qt.DisplayRole:
+        elif not parent and role == Qt.ItemDataRole.DisplayRole:
             if index.column() == 0:
                 return node.id
             if index.column() == 1:
                 return node.name
             if index.column() == 2:
                 return str(node.period)
-        if role == Qt.TextAlignmentRole and \
+        if role == Qt.ItemDataRole.TextAlignmentRole and \
                 (index.column() == 4 or index.column() == 3):
-            return Qt.AlignHCenter | Qt.AlignVCenter
+            return Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter
 
         return None
 
@@ -286,47 +286,37 @@ class CheckboxDelegate(QStyledItemDelegate):
         col = index.column()
         if not item.parent and (col == 3 or col == 4):
             s = QStyleOptionButton()
-            checkbox_rect = QApplication.style(). \
-                subElementRect(QStyle.SE_CheckBoxIndicator, option)
+            checkbox_rect = QApplication.style().subElementRect(QStyle.SubElement.SE_CheckBoxIndicator, option)
             s.rect = option.rect
-            center_offset = s.rect.width() / 2 - checkbox_rect.width() / 2
+            center_offset = int(s.rect.width() / 2 - checkbox_rect.width() / 2)
             s.rect.adjust(center_offset, 0, 0, 0)
 
             if col == 3:
                 if not item.doing_transaction():
-                    s.state = QStyle.State_Enabled
+                    s.state = QStyle.StateFlag.State_Enabled
                 if item.logging_started():
-                    s.state |= QStyle.State_On
+                    s.state |= QStyle.StateFlag.State_On
 
             if col == 4:
-                s.state = QStyle.State_Enabled
+                s.state = QStyle.StateFlag.State_Enabled
                 if item.writing_to_file():
-                    s.state |= QStyle.State_On
+                    s.state |= QStyle.StateFlag.State_On
 
             self._paint_checkbox(s, painter)
         else:
             super(CheckboxDelegate, self).paint(painter, option, index)
 
-    """There is a bug in QT5 on OS X that draws the checkboxes in the top
-    left corner. This is a workaround to fix the problem.
-    See https://bugreports.qt.io/browse/QTBUG-40833 """
     def _paint_checkbox(self, style, painter):
-        if hasattr(QSysInfo, 'MacintoshVersion') and \
-                        QSysInfo.MacintoshVersion >= QSysInfo.MV_10_9 and \
-                        style.state & QStyle.State_Enabled:
-            self._paint_checkbox_osx_workaround(style, painter)
-        else:
-            QApplication.style().drawControl(
-                QStyle.CE_CheckBox, style, painter)
+        QApplication.style().drawControl(QStyle.ControlElement.CE_CheckBox, style, painter)
 
     def _paint_checkbox_osx_workaround(self, style, painter):
         painter.save()
         painter.translate(style.rect.topLeft())
-        QApplication.style().drawControl(QStyle.CE_CheckBox, style, painter)
+        QApplication.style().drawControl(QStyle.ControlElement.CE_CheckBox, style, painter)
         painter.restore()
 
 
-class LogBlockTab(Tab, logblock_tab_class):
+class LogBlockTab(TabToolbox, logblock_tab_class):
     """
     Used to show debug-information about logblock status.
     """
@@ -334,16 +324,10 @@ class LogBlockTab(Tab, logblock_tab_class):
     _blocks_updated_signal = pyqtSignal(bool)
     _disconnected_signal = pyqtSignal(str)
 
-    def __init__(self, tabWidget, helper, *args):
+    def __init__(self, helper):
         """Initialize the tab"""
-        super(LogBlockTab, self).__init__(*args)
+        super(LogBlockTab, self).__init__(helper, 'Log Blocks')
         self.setupUi(self)
-
-        self.tabName = "Log Blocks"
-        self.menuName = "Log Blocks"
-
-        self._helper = helper
-        self.tabWidget = tabWidget
 
         self._helper.cf.log.block_added_cb.add_callback(self._block_added)
         self._disconnected_signal.connect(self._disconnected)
@@ -354,7 +338,7 @@ class LogBlockTab(Tab, logblock_tab_class):
         self._block_tree.setModel(self._model)
         self._block_tree.clicked.connect(self._model.clicked)
         self._block_tree.setItemDelegate(CheckboxDelegate())
-        self._block_tree.setSelectionMode(QAbstractItemView.NoSelection)
+        self._block_tree.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
 
     def _block_added(self, block):
         """Callback from logging layer when a new block is added"""

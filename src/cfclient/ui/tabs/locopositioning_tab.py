@@ -7,7 +7,7 @@
 #  +------+    / /_/ / / /_/ /__/ /  / /_/ / / /_/  __/
 #   ||  ||    /_____/_/\__/\___/_/   \__,_/ /___/\___/
 #
-#  Copyright (C) 2011-2017 Bitcraze AB
+#  Copyright (C) 2011-2026 Bitcraze AB
 #
 #  Crazyflie Nano Quadcopter Client
 #
@@ -35,14 +35,13 @@ from enum import Enum
 from collections import namedtuple
 
 import time
-from PyQt5 import uic
-from PyQt5.QtCore import Qt, pyqtSignal, QTimer
-from PyQt5.QtGui import QFont
-from PyQt5.QtGui import QMessageBox
-from PyQt5.QtGui import QLabel
+from PyQt6 import uic
+from PyQt6.QtCore import Qt, pyqtSignal, QTimer
+from PyQt6.QtWidgets import QMessageBox
+from PyQt6.QtWidgets import QLabel
 
 import cfclient
-from cfclient.ui.tab import Tab
+from cfclient.ui.tab_toolbox import TabToolbox
 
 from cflib.crazyflie.log import LogConfig
 from cflib.crazyflie.mem import MemoryElement
@@ -50,32 +49,17 @@ from lpslib.lopoanchor import LoPoAnchor
 
 from cfclient.ui.dialogs.anchor_position_dialog import AnchorPositionDialog
 
+from vispy import scene
+import numpy as np
+
 import copy
-import sys
 
 __author__ = 'Bitcraze AB'
 __all__ = ['LocoPositioningTab']
 
 logger = logging.getLogger(__name__)
 
-locopositioning_tab_class = uic.loadUiType(
-    cfclient.module_path + "/ui/tabs/locopositioning_tab.ui")[0]
-
-# Try the imports for PyQtGraph to see if it is installed
-try:
-    import pyqtgraph as pg
-    from pyqtgraph import ViewBox  # noqa
-    import pyqtgraph.console  # noqa
-    import numpy as np  # noqa
-
-    _pyqtgraph_found = True
-except Exception:
-    import traceback
-
-    logger.warning("PyQtGraph (or dependency) failed to import:\n%s",
-                   traceback.format_exc())
-    _pyqtgraph_found = False
-
+locopositioning_tab_class = uic.loadUiType(cfclient.module_path + "/ui/tabs/locopositioning_tab.ui")[0]
 
 STYLE_RED_BACKGROUND = "background-color: lightpink;"
 STYLE_GREEN_BACKGROUND = "background-color: lightgreen;"
@@ -122,143 +106,161 @@ class AxisScaleStep:
         self.center_only = center_only
 
 
-class PlotWrapper:
-    XAxis = 0
-    YAxis = 1
-    _refs = []
-    _change_lock = False
-
-    axis_dict = {'x': 0, 'y': 1, 'z': 2}
-
-    ANCHOR_BRUSH = (50, 150, 50)
-    ANCHOR_BRUSH_INVALID = (200, 150, 150)
-    HIGHLIGHT_ANCHOR_BRUSH = (0, 255, 0)
-    POSITION_BRUSH = (0, 0, 255)
+class Plot3dLps(scene.SceneCanvas):
+    ANCHOR_BRUSH = np.array((0.2, 0.5, 0.2))
+    ANCHOR_BRUSH_INVALID = np.array((0.8, 0.5, 0.5))
+    HIGHLIGHT_ANCHOR_BRUSH = np.array((0, 1, 0))
+    POSITION_BRUSH = np.array((0, 0, 1.0))
 
     VICINITY_DISTANCE = 2.5
     HIGHLIGHT_DISTANCE = 0.5
 
-    LABEL_SIZE = 15
-    LABEL_HIGHLIGHT_SIZE = 30
+    LABEL_SIZE = 100
+    LABEL_HIGHLIGHT_SIZE = 200
 
     ANCHOR_SIZE = 10
     HIGHLIGHT_SIZE = 20
 
-    def __init__(self, title, horizontal, vertical):
-        self._horizontal = horizontal
-        self._vertical = vertical
-        self._depth = self._find_missing_axis(horizontal, vertical)
-        self._title = title
-        self.widget = pg.PlotWidget(title=title, enableMenu=False)
-        self.widget.getPlotItem().hideButtons()
-        self._axis_scale_steps = []
+    TEXT_OFFSET = np.array((0.0, 0, 0.25))
 
-        self.widget.setLabel('left', self._vertical, units='m')
-        self.widget.setLabel('bottom', self._horizontal, units='m')
+    def __init__(self):
+        # Note: autoswap is disabled since Qt's QOpenGLWidget path already presents
+        # the FBO; enabling vispy autoswap here would cause a redundant swap and
+        # eglSwapBuffers warnings.
+        scene.SceneCanvas.__init__(self, keys=None, autoswap=False)
+        self.unfreeze()
 
-        self.widget.setAspectLocked(True, 1)
-        self.widget.getViewBox().sigRangeChanged.connect(self._view_changed)
-        self.view = self.widget.getViewBox()
+        self._view = self.central_widget.add_view()
+        self._view.bgcolor = '#ffffff'
+        self._view.camera = scene.TurntableCamera(
+            distance=10.0,
+            up='+z',
+            center=(0.0, 0.0, 1.0))
 
-    def update(self, anchors, pos, display_mode):
-        self.widget.clear()
+        self._cf = scene.visuals.Markers(
+            pos=np.array([[0, 0, 0]]),
+            parent=self._view.scene,
+            face_color=self.POSITION_BRUSH)
+        self._anchor_contexts = {}
 
-        # Sort anchors in depth order to add the one closes last
-        for (id, anchor) in sorted(
-                anchors.items(),
-                key=lambda item: getattr(item[1], self._depth), reverse=True):
-            anchor_v = getattr(anchor, self._horizontal)
-            anchor_h = getattr(anchor, self._vertical)
-            anchor_active = anchor.is_active()
-            if anchor.is_position_valid():
-                self._plot_anchor(anchor_v, anchor_h, id, anchor.distance,
-                                  display_mode, anchor_active)
+        self.freeze()
 
-        if display_mode is DisplayMode.estimated_position:
-            cf_h = pos[PlotWrapper.axis_dict[self._horizontal]]
-            cf_v = pos[PlotWrapper.axis_dict[self._vertical]]
-            self.widget.plot([cf_h], [cf_v], pen=None,
-                             symbolBrush=PlotWrapper.POSITION_BRUSH)
+        plane_size = 10
+        scene.visuals.Plane(
+            width=plane_size,
+            height=plane_size,
+            width_segments=plane_size,
+            height_segments=plane_size,
+            color=(0.5, 0.5, 0.5, 0.5),
+            edge_color="gray",
+            parent=self._view.scene)
 
-    def _find_missing_axis(self, axis1, axis2):
-        all = set(self.axis_dict.keys())
-        all.remove(axis1)
-        all.remove(axis2)
+        self.addArrows(1, 0.02, 0.1, 0.1, self._view.scene)
 
-        return list(all)[0]
+    def addArrows(self, length, width, head_length, head_width, parent):
+        # The Arrow visual in vispy does not seem to work very good,
+        # draw arrows using lines instead.
+        w = width / 2
+        hw = head_width / 2
+        base_len = length - head_length
 
-    def _plot_anchor(self, x, y, anchor_id, distance, display_mode, is_active):
-        if is_active:
-            brush = PlotWrapper.ANCHOR_BRUSH
+        # X-axis
+        scene.visuals.LinePlot([
+            [0, w, 0],
+            [base_len, w, 0],
+            [base_len, hw, 0],
+            [length, 0, 0],
+            [base_len, -hw, 0],
+            [base_len, -w, 0],
+            [0, -w, 0]],
+            width=1.0, color='red', parent=parent, marker_size=0.0)
+
+        # Y-axis
+        scene.visuals.LinePlot([
+            [w, 0, 0],
+            [w, base_len, 0],
+            [hw, base_len, 0],
+            [0, length, 0],
+            [-hw, base_len, 0],
+            [-w, base_len, 0],
+            [-w, 0, 0]],
+            width=1.0, color='green', parent=parent, marker_size=0.0)
+
+        # Z-axis
+        scene.visuals.LinePlot([
+            [0, w, 0],
+            [0, w, base_len],
+            [0, hw, base_len],
+            [0, 0, length],
+            [0, -hw, base_len],
+            [0, -w, base_len],
+            [0, -w, 0]],
+            width=1.0, color='blue', parent=parent, marker_size=0.0)
+
+    def update_data(self, anchors, pos, display_mode):
+        self._cf.set_data(pos=np.array([pos]), face_color=self.POSITION_BRUSH)
+
+        for id, anchor in anchors.items():
+            self._update_anchor(id, anchor, display_mode)
+
+        self._purge_anchors(anchors.keys())
+
+    def _update_anchor(self, id, anchor, display_mode):
+        if anchor.is_active():
+            color = self.ANCHOR_BRUSH
         else:
-            brush = PlotWrapper.ANCHOR_BRUSH_INVALID
+            color = self.ANCHOR_BRUSH_INVALID
 
-        size = PlotWrapper.ANCHOR_SIZE
+        size = self.ANCHOR_SIZE
         font_size = self.LABEL_SIZE
+        distance = anchor.distance
         if display_mode is DisplayMode.identify_anchor:
-            if distance < PlotWrapper.VICINITY_DISTANCE:
-                brush = self._mix_brushes(
-                    brush,
-                    PlotWrapper.HIGHLIGHT_ANCHOR_BRUSH,
-                    distance / PlotWrapper.VICINITY_DISTANCE)
+            if distance < self.VICINITY_DISTANCE:
+                amount = (distance - self.HIGHLIGHT_DISTANCE) / \
+                    (self.VICINITY_DISTANCE - self.HIGHLIGHT_DISTANCE)
+                color = self._mix(color, self.HIGHLIGHT_ANCHOR_BRUSH, amount)
 
-            if distance < PlotWrapper.HIGHLIGHT_DISTANCE:
-                brush = PlotWrapper.HIGHLIGHT_ANCHOR_BRUSH
-                size = PlotWrapper.HIGHLIGHT_SIZE
+            if distance < self.HIGHLIGHT_DISTANCE:
+                color = self.HIGHLIGHT_ANCHOR_BRUSH
+                size = self.HIGHLIGHT_SIZE
                 font_size = self.LABEL_HIGHLIGHT_SIZE
 
-        self.widget.plot([x], [y], pen=None, symbolBrush=brush,
-                         symbolSize=size)
+        marker_pos = anchor.get_position()
+        text_pos = self.TEXT_OFFSET + marker_pos
+        if id in self._anchor_contexts:
+            self._anchor_contexts[id][0].set_data(
+                pos=np.array([marker_pos]),
+                face_color=color,
+                size=size)
 
-        text = pg.TextItem(text="{}".format(anchor_id))
-        font = QFont("Helvetica", font_size)
-        text.setFont(font)
-        self.widget.addItem(text)
-        text.setPos(x, y)
+            text = self._anchor_contexts[id][1]
+            text.pos = text_pos
+            text.font_size = font_size
+        else:
+            marker = scene.visuals.Markers(
+                pos=np.array([marker_pos]),
+                face_color=color,
+                size=size,
+                parent=self._view.scene)
+            text = scene.visuals.Text(
+                text=str(id),
+                font_size=font_size,
+                pos=text_pos,
+                parent=self._view.scene)
+            self._anchor_contexts[id] = [marker, text]
 
-    def _mix_brushes(self, brush1, brush2, mix):
-        if mix < 0.0:
-            return brush1
-        if mix > 1.0:
-            return brush2
+    def _purge_anchors(self, keep):
+        to_remove = []
+        for id, context in self._anchor_contexts.items():
+            if id not in keep:
+                to_remove.append(id)
+                for visual in context:
+                    visual.parent = None
+        for id in to_remove:
+            self._anchor_contexts.pop(id)
 
-        b1 = mix
-        b2 = 1.0 - mix
-        return (
-            brush1[0] * b1 + brush2[0] * b2,
-            brush1[1] * b1 + brush2[1] * b2,
-            brush1[2] * b1 + brush2[2] * b2,
-        )
-
-    def _view_changed(self, view, settings):
-        # Ignore all callbacks until this change is processed
-        if PlotWrapper._change_lock:
-            return
-        PlotWrapper._change_lock = True
-
-        for step in self._axis_scale_steps:
-            range = step.from_view.viewRange()[step.from_axis]
-            new_range = range
-
-            if step.center_only:
-                center = (range[0] + range[1]) / 2
-                current_range = step.to_view.viewRange()[step.to_axis]
-                current_center = (current_range[0] + current_range[1]) / 2
-                delta = center - current_center
-                new_range = [current_range[0] + delta,
-                             current_range[1] + delta]
-
-            if step.to_axis is PlotWrapper.XAxis:
-                step.to_view.setRange(xRange=new_range, padding=0.0,
-                                      update=True)
-            else:
-                step.to_view.setRange(yRange=new_range, padding=0.0,
-                                      update=True)
-
-        PlotWrapper._change_lock = False
-
-    def set_scale_steps(self, steps):
-        self._axis_scale_steps = steps
+    def _mix(self, col1, col2, mix):
+        return col1 * mix + col2 * (1.0 - mix)
 
 
 class DisplayMode(Enum):
@@ -296,8 +298,7 @@ class AnchorStateMachine:
     def poll(self):
         if not self._waiting_for_response:
             self._next_step()
-            self._request_step()
-            self._waiting_for_response = True
+            self._waiting_for_response = self._request_step()
 
     def _next_step(self):
         self._current_step += 1
@@ -305,13 +306,21 @@ class AnchorStateMachine:
             self._current_step = 0
 
     def _request_step(self):
+        result = True
+
         action = AnchorStateMachine.STEPS[self._current_step]
         if action == AnchorStateMachine.GET_ACTIVE:
             self._mem.update_active_id_list(self._cb_active_id_list_updated)
         elif action == AnchorStateMachine.GET_IDS:
             self._mem.update_id_list(self._cb_id_list_updated)
         else:
-            self._mem.update_data(self._cb_data_updated)
+            if self._mem.nr_of_anchors > 0:
+                # Only request anchor data if we actually have anchors, otherwise the callback will never be called
+                self._mem.update_data(self._cb_data_updated)
+            else:
+                result = False
+
+        return result
 
     def _get_mem(self, mem_sub):
         mem = mem_sub.get_mems(MemoryElement.TYPE_LOCO2)
@@ -335,7 +344,7 @@ class AnchorStateMachine:
             self._cb_data(mem_data.anchor_data)
 
 
-class LocoPositioningTab(Tab, locopositioning_tab_class):
+class LocoPositioningTab(TabToolbox, locopositioning_tab_class):
     """Tab for plotting Loco Positioning data"""
 
     # Update period of log data in ms
@@ -363,25 +372,17 @@ class LocoPositioningTab(Tab, locopositioning_tab_class):
     _disconnected_signal = pyqtSignal(str)
     _log_error_signal = pyqtSignal(object, str)
     _anchor_range_signal = pyqtSignal(int, object, object)
-    _position_signal = pyqtSignal(int, object, object)
     _loco_sys_signal = pyqtSignal(int, object, object)
     _cb_param_to_detect_loco_deck_signal = pyqtSignal(object, object)
 
     _anchor_active_id_list_updated_signal = pyqtSignal(object)
     _anchor_data_updated_signal = pyqtSignal(object)
 
-    def __init__(self, tabWidget, helper, *args):
-        super(LocoPositioningTab, self).__init__(*args)
+    def __init__(self, helper):
+        super(LocoPositioningTab, self).__init__(helper, 'Loco Positioning')
         self.setupUi(self)
 
-        self.tabName = "Loco Positioning"
-        self.menuName = "Loco Positioning Tab"
-        self.tabWidget = tabWidget
-
-        self._helper = helper
-
         self._anchors = {}
-        self._position = []
         self._clear_state()
         self._refs = []
 
@@ -392,7 +393,6 @@ class LocoPositioningTab(Tab, locopositioning_tab_class):
         self._connected_signal.connect(self._connected)
         self._disconnected_signal.connect(self._disconnected)
         self._anchor_range_signal.connect(self._anchor_range_received)
-        self._position_signal.connect(self._position_received)
         self._loco_sys_signal.connect(self._loco_sys_received)
         self._cb_param_to_detect_loco_deck_signal.connect(
             self._cb_param_to_detect_loco_deck)
@@ -453,7 +453,6 @@ class LocoPositioningTab(Tab, locopositioning_tab_class):
             self._send_anchor_mode(self.LOCO_MODE_TDOA3)
         )
 
-        self._show_all_button.clicked.connect(self._scale_and_center_graphs)
         self._clear_anchors_button.clicked.connect(self._clear_anchors)
 
         self._configure_anchor_positions_button.clicked.connect(
@@ -471,7 +470,7 @@ class LocoPositioningTab(Tab, locopositioning_tab_class):
         self.is_loco_deck_active = False
 
         self._graph_timer = QTimer()
-        self._graph_timer.setInterval(1000 / self.FPS)
+        self._graph_timer.setInterval(int(1000 / self.FPS))
         self._graph_timer.timeout.connect(self._update_graphics)
         self._graph_timer.start()
 
@@ -480,12 +479,12 @@ class LocoPositioningTab(Tab, locopositioning_tab_class):
         self._anchor_state_timer.timeout.connect(self._poll_anchor_state)
         self._anchor_state_machine = None
 
-        self._update_position_label(self._position)
+        self._update_position_label(self._helper.pose_logger.position)
 
         self._lps_state = self.LOCO_MODE_UNKNOWN
         self._update_lps_state(self.LOCO_MODE_UNKNOWN)
 
-        self._anchor_position_dialog = AnchorPositionDialog(self)
+        self._anchor_position_dialog = AnchorPositionDialog(self, helper)
         self._configure_anchor_positions_button.setEnabled(False)
 
     def _do_when_checked(self, enabled, fkn, arg):
@@ -493,38 +492,8 @@ class LocoPositioningTab(Tab, locopositioning_tab_class):
             fkn(arg)
 
     def _set_up_plots(self):
-        self._plot_xy = PlotWrapper("Top view (X/Y)", "x", "y")
-        self._plot_top_left_layout.addWidget(self._plot_xy.widget)
-        self._plot_xz = PlotWrapper("Front view (X/Z)", "x", "z")
-        self._plot_bottom_left_layout.addWidget(self._plot_xz.widget)
-        self._plot_yz = PlotWrapper("Right view (Y/Z)", "y", "z")
-        self._plot_bottom_right_layout.addWidget(self._plot_yz.widget)
-        self._plot_xy.set_scale_steps([
-            AxisScaleStep(self._plot_xy, PlotWrapper.XAxis,
-                          self._plot_xz, PlotWrapper.XAxis),
-            AxisScaleStep(self._plot_xz, PlotWrapper.YAxis,
-                          self._plot_yz, PlotWrapper.YAxis),
-            AxisScaleStep(self._plot_xy, PlotWrapper.YAxis,
-                          self._plot_yz, PlotWrapper.XAxis, center_only=True)
-        ])
-        self._plot_xz.set_scale_steps([
-            AxisScaleStep(self._plot_xz, PlotWrapper.XAxis,
-                          self._plot_xy, PlotWrapper.XAxis),
-            AxisScaleStep(self._plot_xz, PlotWrapper.YAxis,
-                          self._plot_yz, PlotWrapper.YAxis),
-            AxisScaleStep(self._plot_xy, PlotWrapper.YAxis,
-                          self._plot_yz, PlotWrapper.XAxis, center_only=True)
-        ])
-        self._plot_yz.set_scale_steps([
-            AxisScaleStep(self._plot_yz, PlotWrapper.YAxis,
-                          self._plot_xz, PlotWrapper.YAxis),
-            AxisScaleStep(self._plot_xz, PlotWrapper.XAxis,
-                          self._plot_xy, PlotWrapper.XAxis),
-            AxisScaleStep(self._plot_yz, PlotWrapper.XAxis,
-                          self._plot_xy, PlotWrapper.YAxis, center_only=True)
-        ])
-
-        self._plot_xy.view.setRange(xRange=(0.0, 5.0))
+        self._plot_3d = Plot3dLps()
+        self._plot_layout.addWidget(self._plot_3d.native)
 
     def _set_display_mode(self, display_mode):
         self._display_mode = display_mode
@@ -548,140 +517,39 @@ class LocoPositioningTab(Tab, locopositioning_tab_class):
 
     def _clear_state(self):
         self._clear_anchors()
-        self._position = [0.0, 0.0, 0.0]
         self._update_ranging_status_indicators()
         self._id_anchor_button.setEnabled(True)
 
     def _clear_anchors(self):
         self._anchors = {}
 
-    def _scale_and_center_graphs(self):
-        start_bounds = Range(sys.float_info.max, -sys.float_info.max)
-        bounds = {"x": start_bounds, "y": start_bounds,
-                  "z": start_bounds}
-        for a in self._anchors.values():
-            bounds = self._find_min_max_data_range(bounds, [a.x, a.y, a.z])
-        bounds = self._find_min_max_data_range(bounds, self._position)
-
-        bounds = self._pad_bounds(bounds)
-        self._center_all_data_in_graphs(bounds)
-        self._rescale_to_fit_data(bounds)
-
-    def _rescale_to_fit_data(self, bounds):
-        [[xy_xmin, xy_xmax],
-            [xy_ymin, xy_ymax]] = self._plot_xy.view.viewRange()
-        [[yz_xmin, yz_xmax],
-            [yz_ymin, yz_ymax]] = self._plot_yz.view.viewRange()
-        if not self._is_data_visibile(bounds, self._position):
-            if self._will_new_range_zoom_in(Range(xy_xmin, xy_xmax),
-                                            bounds["x"]):
-                self._plot_xy.view.setRange(xRange=bounds["x"],
-                                            padding=0.0, update=True)
-
-        if not self._is_data_visibile(bounds, self._position):
-            if self._will_new_range_zoom_in(Range(xy_ymin, xy_ymax),
-                                            bounds["y"]):
-                self._plot_xy.view.setRange(yRange=bounds["y"],
-                                            padding=0.0, update=True)
-
-        if not self._is_data_visibile(bounds, self._position):
-            if self._will_new_range_zoom_in(Range(yz_xmin, yz_xmax),
-                                            bounds["y"]):
-                self._plot_yz.view.setRange(yRange=bounds["y"],
-                                            padding=0.0, update=True)
-
-        if not self._is_data_visibile(bounds, self._position):
-            if self._will_new_range_zoom_in(Range(yz_ymin, yz_ymax),
-                                            bounds["z"]):
-                self._plot_yz.view.setRange(yRange=bounds["z"], padding=0.0,
-                                            update=True)
-
-    def _pad_bounds(self, ranges):
-        new_ranges = ranges
-
-        new_ranges["x"] = Range(new_ranges["x"].min - 1.0,
-                                new_ranges["x"].max + 1.0)
-
-        new_ranges["y"] = Range(new_ranges["y"].min - 1.0,
-                                new_ranges["y"].max + 1.0)
-
-        new_ranges["z"] = Range(new_ranges["z"].min - 1.0,
-                                new_ranges["z"].max + 1.0)
-
-        return new_ranges
-
-    def _center_all_data_in_graphs(self, ranges):
-        # Will center data in graphs without taking care of scaling
-        self._plot_xy.view.setRange(xRange=ranges["x"], yRange=ranges["y"],
-                                    padding=0.0, update=True)
-        self._plot_yz.view.setRange(yRange=ranges["z"], padding=0.0,
-                                    update=True)
-
-    def _will_new_range_zoom_in(self, old_range, new_range):
-        return old_range.min > new_range.min
-
-    def _is_data_visibile(self, ranges, point):
-        [[xy_xmin, xy_xmax],
-            [xy_ymin, xy_ymax]] = self._plot_xy.view.viewRange()
-        [[yz_xmin, yz_xmax],
-            [yz_ymin, yz_ymax]] = self._plot_yz.view.viewRange()
-        [[xz_xmin, xz_xmax],
-            [xz_ymin, xz_ymax]] = self._plot_xz.view.viewRange()
-
-        allVisible = True
-
-        if ranges["x"].min < xy_xmin or ranges["x"].max > xy_xmax:
-            allVisible = False
-
-        if ranges["z"].min < yz_ymin or ranges["z"].max > yz_ymax:
-            allVisible = False
-
-        if ranges["y"].min < yz_xmin or ranges["y"].max > yz_xmax:
-            allVisible = False
-
-        if ranges["y"].min < xy_ymin or ranges["y"].max > xy_ymax:
-            allVisible = False
-
-        return allVisible
-
-    def _find_min_max_data_range(self, ranges, point):
-        result = ranges
-
-        result["x"] = Range(min(ranges["x"].min, point[0]),
-                            max(ranges["x"].max, point[0]))
-
-        result["y"] = Range(min(ranges["y"].min, point[1]),
-                            max(ranges["y"].max, point[1]))
-
-        result["z"] = Range(min(ranges["z"].min, point[2]),
-                            max(ranges["z"].max, point[2]))
-
-        return result
-
     def _connected(self, link_uri):
         """Callback when the Crazyflie has been connected"""
-        logger.info("Crazyflie connected to {}".format(link_uri))
+        logger.debug("Crazyflie connected to {}".format(link_uri))
         self._request_param_to_detect_loco_deck()
 
     def _request_param_to_detect_loco_deck(self):
         """Send a parameter request to detect if the Loco deck is installed"""
         group = 'deck'
-        param = 'bcDWM1000'
 
-        if self._is_in_param_toc(group, param):
-            logger.info("Requesting loco deck parameter")
-            self._helper.cf.param.add_update_callback(
-                group=group, name=param,
-                cb=self._cb_param_to_detect_loco_deck_signal.emit)
+        def register(group, param):
+            if self._is_in_param_toc(group, param):
+                logger.debug("Requesting loco deck parameter")
+                self._helper.cf.param.add_update_callback(group=group,
+                                                          name=param,
+                                                          cb=self._cb_param_to_detect_loco_deck_signal.emit)
+
+        register(group, 'bcLoco')
+        register(group, 'bcDWM1000')  # For backwards compatibility
 
     def _cb_param_to_detect_loco_deck(self, name, value):
         """Callback from the parameter sub system when the Loco deck detection
         parameter has been updated"""
         if value == '1':
-            logger.info("Loco deck installed, enabling LPS tab")
+            logger.debug("Loco deck installed, enabling LPS tab")
             self._loco_deck_detected()
         else:
-            logger.info("No Loco deck installed")
+            logger.debug("No Loco deck installed")
 
     def _loco_deck_detected(self):
         """Called when the loco deck has been detected. Enables the tab,
@@ -710,16 +578,6 @@ class LocoPositioningTab(Tab, locopositioning_tab_class):
                         ("ranging", "distance7", "float"),
                     ],
                     self._anchor_range_signal.emit,
-                    self._log_error_signal.emit)
-
-                self._register_logblock(
-                    "LoPoTab2",
-                    [
-                        ("kalman", "stateX", "float"),
-                        ("kalman", "stateY", "float"),
-                        ("kalman", "stateZ", "float"),
-                    ],
-                    self._position_signal.emit,
                     self._log_error_signal.emit)
 
                 self._register_logblock(
@@ -803,13 +661,6 @@ class LocoPositioningTab(Tab, locopositioning_tab_class):
                     anchor = self._get_create_anchor(anchor_number)
                     anchor.distance = float(value)
 
-    def _position_received(self, timestamp, data, logconf):
-        """Callback from the logging system when the position is updated."""
-        for name, value in data.items():
-            valid, axis = self._parse_position_param_name(name)
-            if valid:
-                self._position[axis] = float(value)
-
     def _loco_sys_received(self, timestamp, data, logconf):
         """Callback from the logging system when the loco pos sys config
         is updated."""
@@ -842,7 +693,7 @@ class LocoPositioningTab(Tab, locopositioning_tab_class):
                 label = QLabel()
                 label.setMinimumSize(30, 0)
                 label.setProperty('frameShape', 'QFrame::Box')
-                label.setAlignment(Qt.AlignCenter)
+                label.setAlignment(Qt.AlignmentFlag.AlignCenter)
                 container.addWidget(label, row, col)
 
             label.setText(str(id))
@@ -942,10 +793,11 @@ class LocoPositioningTab(Tab, locopositioning_tab_class):
     def _update_graphics(self):
         if self.is_visible() and self.is_loco_deck_active:
             anchors = copy.deepcopy(self._anchors)
-            self._plot_yz.update(anchors, self._position, self._display_mode)
-            self._plot_xy.update(anchors, self._position, self._display_mode)
-            self._plot_xz.update(anchors, self._position, self._display_mode)
-            self._update_position_label(self._position)
+            self._plot_3d.update_data(
+                anchors,
+                self._helper.pose_logger.position,
+                self._display_mode)
+            self._update_position_label(self._helper.pose_logger.position)
 
     def _update_position_label(self, position):
         if len(position) == 3:

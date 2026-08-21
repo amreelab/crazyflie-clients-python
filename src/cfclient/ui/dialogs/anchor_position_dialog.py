@@ -6,7 +6,7 @@
 #  +------+    / /_/ / / /_/ /__/ /  / /_/ / / /_/  __/
 #   ||  ||    /_____/_/\__/\___/_/   \__,_/ /___/\___/
 #
-#  Copyright (C) 2018 Bitcraze AB
+#  Copyright (C) 2018-2026 Bitcraze AB
 #
 #  This program is free software; you can redistribute it and/or
 #  modify it under the terms of the GNU General Public License
@@ -28,11 +28,12 @@ Dialog box used to configure anchor positions. Used from the LPS tab.
 import logging
 
 import cfclient
-from PyQt5 import QtWidgets
-from PyQt5 import uic
-from PyQt5.QtCore import QAbstractTableModel, QVariant, Qt
-from PyQt5.QtGui import QBrush, QColor
-from PyQt5.QtWidgets import QInputDialog, QFileDialog
+from cfclient.utils.logconfigreader import FILE_REGEX_YAML
+from PyQt6 import QtWidgets
+from PyQt6 import uic
+from PyQt6.QtCore import QAbstractTableModel, QVariant, Qt
+from PyQt6.QtGui import QBrush, QColor
+from PyQt6.QtWidgets import QInputDialog, QFileDialog
 import yaml
 import os
 
@@ -67,22 +68,22 @@ class AnchorPositionConfigTableModel(QAbstractTableModel):
         value = self._anchor_positions[index.row()][index.column()]
         if index.isValid():
             if index.column() == 0:
-                if role == Qt.CheckStateRole:
+                if role == Qt.ItemDataRole.CheckStateRole:
                     return QVariant(value)
             elif index.column() == 1:
-                if role == Qt.DisplayRole:
+                if role == Qt.ItemDataRole.DisplayRole:
                     return QVariant(value)
             else:
-                if role == Qt.DisplayRole:
+                if role == Qt.ItemDataRole.DisplayRole:
                     return QVariant('%.2f' % (value))
-                elif role == Qt.EditRole:
+                elif role == Qt.ItemDataRole.EditRole:
                     return QVariant(value)
-                elif role == Qt.BackgroundRole:
+                elif role == Qt.ItemDataRole.BackgroundRole:
                     return self._get_background(index.row(), index.column())
 
         return QVariant()
 
-    def setData(self, index, value, role=Qt.EditRole):
+    def setData(self, index, value, role=Qt.ItemDataRole.EditRole):
         if not index.isValid():
             return False
 
@@ -90,7 +91,7 @@ class AnchorPositionConfigTableModel(QAbstractTableModel):
         return True
 
     def headerData(self, col, orientation, role=None):
-        if orientation == Qt.Horizontal and role == Qt.DisplayRole:
+        if orientation == Qt.Orientation.Horizontal and role == Qt.ItemDataRole.DisplayRole:
             return QVariant(self._headers[col])
         return QVariant()
 
@@ -99,11 +100,11 @@ class AnchorPositionConfigTableModel(QAbstractTableModel):
             return None
 
         if index.column() == 0:
-            return Qt.ItemIsEnabled | Qt.ItemIsUserCheckable
+            return Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsUserCheckable
         elif index.column() == 1:
-            return Qt.ItemIsEnabled
+            return Qt.ItemFlag.ItemIsEnabled
         else:
-            return Qt.ItemIsEnabled | Qt.ItemIsEditable
+            return Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsEditable
 
     def add_anchor(self, anchor_id, x=0.0, y=0.0, z=0.0):
         if not self._id_exist(anchor_id):
@@ -161,13 +162,12 @@ class AnchorPositionConfigTableModel(QAbstractTableModel):
 
 class AnchorPositionDialog(QtWidgets.QWidget, anchor_postiong_widget_class):
 
-    def __init__(self, lps_tab, *args):
-        super(AnchorPositionDialog, self).__init__(*args)
+    def __init__(self, lps_tab, helper):
+        super(AnchorPositionDialog, self).__init__()
         self.setupUi(self)
 
-        self._current_folder = os.path.expanduser('~')
-
         self._lps_tab = lps_tab
+        self._helper = helper
 
         self._headers = ['', 'id', 'x', 'y', 'z']
         self._data_model = AnchorPositionConfigTableModel(self._headers, self)
@@ -176,11 +176,11 @@ class AnchorPositionDialog(QtWidgets.QWidget, anchor_postiong_widget_class):
         self._table_view.verticalHeader().setVisible(False)
 
         header = self._table_view.horizontalHeader()
-        header.setSectionResizeMode(0, QtWidgets.QHeaderView.ResizeToContents)
-        header.setSectionResizeMode(1, QtWidgets.QHeaderView.ResizeToContents)
-        header.setSectionResizeMode(2, QtWidgets.QHeaderView.Stretch)
-        header.setSectionResizeMode(3, QtWidgets.QHeaderView.Stretch)
-        header.setSectionResizeMode(4, QtWidgets.QHeaderView.Stretch)
+        header.setSectionResizeMode(0, QtWidgets.QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(1, QtWidgets.QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(2, QtWidgets.QHeaderView.ResizeMode.Stretch)
+        header.setSectionResizeMode(3, QtWidgets.QHeaderView.ResizeMode.Stretch)
+        header.setSectionResizeMode(4, QtWidgets.QHeaderView.ResizeMode.Stretch)
 
         self._add_anchor_button.clicked.connect(
             self._add_anchor_button_clicked)
@@ -213,18 +213,16 @@ class AnchorPositionDialog(QtWidgets.QWidget, anchor_postiong_widget_class):
         self._data_model.anchor_postions_updated(anchor_positions)
 
     def _load_button_clicked(self):
-        names = QFileDialog.getOpenFileName(self, 'Open file',
-                                            self._current_folder,
-                                            "*.yaml;;*.*")
+        names = QFileDialog.getOpenFileName(self, 'Open file', self._helper.current_folder, FILE_REGEX_YAML)
 
         if names[0] == '':
             return
 
-        self._current_folder = os.path.dirname(names[0])
+        self._helper.current_folder = os.path.dirname(names[0])
 
         f = open(names[0], 'r')
         with f:
-            data = yaml.load(f)
+            data = yaml.safe_load(f)
 
             anchor_positions = {}
             for id, pos in data.items():
@@ -237,14 +235,12 @@ class AnchorPositionDialog(QtWidgets.QWidget, anchor_postiong_widget_class):
         for id, pos in anchor_positions.items():
             data[id] = {'x': pos[0], 'y': pos[1], 'z': pos[2]}
 
-        names = QFileDialog.getSaveFileName(self, 'Save file',
-                                            self._current_folder,
-                                            "*.yaml;;*.*")
+        names = QFileDialog.getSaveFileName(self, 'Save file', self._helper.current_folder, FILE_REGEX_YAML)
 
         if names[0] == '':
             return
 
-        self._current_folder = os.path.dirname(names[0])
+        self._helper.current_folder = os.path.dirname(names[0])
 
         if not names[0].endswith(".yaml") and names[0].find(".") < 0:
             filename = names[0] + ".yaml"

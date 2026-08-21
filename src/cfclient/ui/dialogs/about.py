@@ -7,7 +7,7 @@
 #  +------+    / /_/ / / /_/ /__/ /  / /_/ / / /_/  __/
 #   ||  ||    /_____/_/\__/\___/_/   \__,_/ /___/\___/
 #
-#  Copyright (C) 2011-2013 Bitcraze AB
+#  Copyright (C) 2011-2026 Bitcraze AB
 #
 #  Crazyflie Nano Quadcopter Client
 #
@@ -31,11 +31,11 @@ import sys
 
 import cfclient
 import cflib.crtp
-from PyQt5.QtCore import QT_VERSION_STR
-from PyQt5.QtCore import PYQT_VERSION_STR
-from PyQt5 import QtWidgets
-from PyQt5 import uic
-from PyQt5.QtCore import pyqtSignal
+from PyQt6.QtCore import QT_VERSION_STR
+from PyQt6.QtCore import PYQT_VERSION_STR
+from PyQt6 import QtWidgets
+from PyQt6 import uic
+from PyQt6.QtCore import pyqtSignal
 from cflib.crazyflie.mem import MemoryElement
 
 __author__ = 'Bitcraze AB'
@@ -84,20 +84,6 @@ SENSOR_TESTS_FORMAT = "{}: {}<br>"
 FIRMWARE_FORMAT = "{:x}{:x} ({})"
 DECK_FORMAT = "{}: rev={}, adr={}<br>"
 
-CREDITS_FORMAT = """
-<b>Contributions</b><br>
-{contribs}
-<br><br>
-<b>Used libraries</b><br>
-<a href="http://qt-project.org/">QT</a><br>
-<a href="http://www.riverbankcomputing.co.uk/software/pyqt/intro">PyQT</a><br>
-<a href="http://pysdl2.readthedocs.org">PySDL2</a><br>
-<a href="http://www.pyqtgraph.org/">PyQtGraph</a><br>
-<a href="http://marble.kde.org/">KDE Marble</a><br>
-<a href="http://sourceforge.net/projects/pyusb/">PyUSB</a><br>
-<a href="http://www.python.org/">Python</a><br>
-"""
-
 
 class AboutDialog(QtWidgets.QWidget, about_widget_class):
     _disconnected_signal = pyqtSignal(str)
@@ -136,19 +122,6 @@ class AboutDialog(QtWidgets.QWidget, about_widget_class):
         helper.cf.disconnected.add_callback(self._disconnected_signal.emit)
 
         self._cb_deck_data_updated_signal.connect(self._deck_data_updated)
-
-        # Open the Credits file and show it in the UI
-        credits = ""
-        try:
-            with open("CREDITS.txt", encoding='utf-8', mode='r') as f:
-                for line in f:
-                    credits += "{}<br>".format(line)
-        except IOError:
-            credits = ""
-
-        self._credits.setHtml(
-            CREDITS_FORMAT.format(contribs=credits)
-        )
 
     def showEvent(self, event):
         """Event when the about box is shown"""
@@ -244,7 +217,9 @@ class AboutDialog(QtWidgets.QWidget, about_widget_class):
 
     def _request_deck_data_update(self):
         self._decks_text = ""
+        # Query both 1-Wire and DeckCtrl memories for deck information
         mems = self._helper.cf.mem.get_mems(MemoryElement.TYPE_1W)
+        mems += self._helper.cf.mem.get_mems(MemoryElement.TYPE_DECKCTRL)
         for mem in mems:
             mem.update(self._cb_deck_data_updated_signal.emit)
 
@@ -257,6 +232,8 @@ class AboutDialog(QtWidgets.QWidget, about_widget_class):
         if "Board revision" in deck_data.elements:
             rev = deck_data.elements["Board revision"]
 
-        self._decks_text += DECK_FORMAT.format(name, rev, deck_data.addr)
+        # OWElement has addr attribute, DeckCtrlElement does not
+        addr = getattr(deck_data, 'addr', 'N/A')
+        self._decks_text += DECK_FORMAT.format(name, rev, addr)
 
         self._update_debug_info_view()

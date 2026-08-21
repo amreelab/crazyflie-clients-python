@@ -7,7 +7,7 @@
 #  +------+    / /_/ / / /_/ /__/ /  / /_/ / / /_/  __/
 #   ||  ||    /_____/_/\__/\___/_/   \__,_/ /___/\___/
 #
-#  Copyright (C) 2011-2017 Bitcraze AB
+#  Copyright (C) 2011-2026 Bitcraze AB
 #
 #  Crazyflie Nano Quadcopter Client
 #
@@ -30,15 +30,14 @@ buttons and axis to match controls for the Crazyflie.
 import logging
 
 import cfclient
-from PyQt5.QtCore import QThread
-from PyQt5.QtCore import QTimer
-from PyQt5.QtCore import pyqtSignal
-from PyQt5.QtWidgets import QMessageBox
+from PyQt6.QtCore import Qt
+from PyQt6.QtCore import QThread
+from PyQt6.QtCore import QTimer
+from PyQt6.QtCore import pyqtSignal
+from PyQt6.QtWidgets import QMessageBox
 from cfclient.utils.config_manager import ConfigManager
-from PyQt5 import Qt
-from PyQt5 import QtWidgets
-from PyQt5 import uic
-from PyQt5.Qt import *  # noqa
+from PyQt6 import QtWidgets
+from PyQt6 import uic
 
 __author__ = 'Bitcraze AB'
 __all__ = ['InputConfigDialogue']
@@ -107,8 +106,12 @@ class InputConfigDialogue(QtWidgets.QWidget, inputconfig_widget_class):
                 "Press the button for Roll negative calibration"))
         self.detectKillswitch.clicked.connect(
             lambda: self._button_detect(
-                "killswitch", "Killswitch",
-                "Press the button for the killswitch (will disable motors)"))
+                "estop", "Disarm/Kill",
+                "Press the button to disarm/kill (will disable motors)"))
+        self.detectArm.clicked.connect(
+            lambda: self._button_detect(
+                "arm", "Arm system",
+                "Press the button to arm the system (will enable motor ouput)"))
         self.detectAlt1.clicked.connect(
             lambda: self._button_detect(
                 "alt1", "Alternative function 1",
@@ -142,9 +145,10 @@ class InputConfigDialogue(QtWidgets.QWidget, inputconfig_widget_class):
             self.detectYaw, self.detectThrust,
             self.detectPitchPos, self.detectPitchNeg,
             self.detectRollPos, self.detectRollNeg,
-            self.detectKillswitch, self.detectExitapp,
-            self._detect_assisted_control, self.detectAlt1,
-            self.detectAlt2, self.detectMuxswitch]
+            self.detectKillswitch, self.detectArm,
+            self.detectExitapp, self._detect_assisted_control,
+            self.detectAlt1, self.detectAlt2,
+            self.detectMuxswitch]
 
         self._button_to_detect = ""
         self._axis_to_detect = ""
@@ -178,7 +182,8 @@ class InputConfigDialogue(QtWidgets.QWidget, inputconfig_widget_class):
             "pitchNeg": self.pitchNeg,
             "rollPos": self.rollPos,
             "rollNeg": self.rollNeg,
-            "killswitch": self.killswitch,
+            "estop": self.killswitch,
+            "arm": self.arm,
             "alt1": self.alt1,
             "alt2": self.alt2,
             "exitapp": self.exitapp,
@@ -205,16 +210,16 @@ class InputConfigDialogue(QtWidgets.QWidget, inputconfig_widget_class):
         self._combined_button = QtWidgets.QPushButton('Combined Axis ' +
                                                       'Detection')
         self.cancelButton = QtWidgets.QPushButton('Cancel')
-        self._popup.addButton(self.cancelButton, QMessageBox.DestructiveRole)
+        self._popup.addButton(self.cancelButton, QMessageBox.ButtonRole.DestructiveRole)
         self._popup.setWindowTitle(caption)
-        self._popup.setWindowFlags(Qt.Dialog | Qt.MSWindowsFixedSizeDialogHint)
+        self._popup.setWindowFlags(Qt.WindowType.Dialog | Qt.WindowType.MSWindowsFixedSizeDialogHint)
         if len(directions) > 1:
             self._popup.originalMessage = message
             message = self._popup.originalMessage % directions[0]
             self._combined_button.setCheckable(True)
             self._combined_button.blockSignals(True)
             self._popup.addButton(self._combined_button,
-                                  QMessageBox.ActionRole)
+                                  QMessageBox.ButtonRole.ActionRole)
         self._popup.setText(message)
         self._popup.show()
 
@@ -295,7 +300,7 @@ class InputConfigDialogue(QtWidgets.QWidget, inputconfig_widget_class):
                     scaled_value = InputConfigDialogue._scale(
                         self._input.max_yaw_rate, scaled_value
                     )
-                self._axisindicators[v].setValue(scaled_value)
+                self._axisindicators[v].setValue(int(scaled_value))
 
     def _map_axis(self, function, key_id, scale):
         self._map["Input.AXIS-{}".format(key_id)] = {}
@@ -348,7 +353,9 @@ class InputConfigDialogue(QtWidgets.QWidget, inputconfig_widget_class):
         if len(configs):
             self.loadButton.setEnabled(True)
         for c in configs:
-            self.profileCombo.addItem(c)
+            display_name = ConfigManager().get_display_name(c)
+            # Store display name but use config name as user data
+            self.profileCombo.addItem(display_name, c)
 
     def _axis_detect(self, varname, caption, message, directions=[]):
         self._axis_to_detect = varname
@@ -362,24 +369,27 @@ class InputConfigDialogue(QtWidgets.QWidget, inputconfig_widget_class):
         QMessageBox.critical(self, caption, message)
 
     def _load_config_from_file(self):
-        loaded_map = ConfigManager().get_config(
-            self.profileCombo.currentText())
+        # Use currentData() to get the config_name, not the display name
+        config_name = self.profileCombo.currentData()
+        loaded_map = ConfigManager().get_config(config_name)
         if loaded_map:
             self._input.set_raw_input_map(loaded_map)
             self._map = loaded_map
         else:
-            logger.warning("Could not load configfile [%s]",
-                           self.profileCombo.currentText())
+            logger.warning("Could not load configfile [%s]", config_name)
             self._show_error("Could not load config",
-                             "Could not load config [%s]" %
-                             self.profileCombo.currentText())
+                             "Could not load config [%s]" % config_name)
         self._check_and_enable_saving()
 
     def _delete_configuration(self):
         logger.warning("deleteConfig not implemented")
 
     def _save_config(self):
-        config_name = str(self.profileCombo.currentText())
+        # Try to get config_name from currentData() (existing config)
+        # Fall back to currentText() if user typed a new name
+        config_name = self.profileCombo.currentData()
+        if config_name is None:
+            config_name = str(self.profileCombo.currentText())
         ConfigManager().save_config(self._map, config_name)
         self.close()
 

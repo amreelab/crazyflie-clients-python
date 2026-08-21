@@ -7,7 +7,7 @@
 #  +------+    / /_/ / / /_/ /__/ /  / /_/ / / /_/  __/
 #   ||  ||    /_____/_/\__/\___/_/   \__,_/ /___/\___/
 #
-#  Copyright (C) 2011-2013 Bitcraze AB
+#  Copyright (C) 2011-2026 Bitcraze AB
 #
 #  Crazyflie Nano Quadcopter Client
 #
@@ -30,14 +30,14 @@ pre-configured.
 
 import logging
 
-from cfclient.ui.tab import Tab
+from cfclient.ui.tab_toolbox import TabToolbox
 from cfclient.ui.widgets.plotwidget import PlotWidget
-from PyQt5 import uic
-from PyQt5.QtCore import pyqtSignal
-from PyQt5.QtCore import QAbstractItemModel
-from PyQt5.QtCore import QModelIndex
-from PyQt5.QtCore import Qt
-from PyQt5.QtWidgets import QMessageBox
+from PyQt6 import uic
+from PyQt6.QtCore import pyqtSignal
+from PyQt6.QtCore import QAbstractItemModel
+from PyQt6.QtCore import QModelIndex
+from PyQt6.QtCore import Qt
+from PyQt6.QtWidgets import QMessageBox
 
 import cfclient
 
@@ -46,8 +46,7 @@ __all__ = ['PlotTab']
 
 logger = logging.getLogger(__name__)
 
-plot_tab_class = uic.loadUiType(cfclient.module_path +
-                                "/ui/tabs/plotTab.ui")[0]
+plot_tab_class = uic.loadUiType(cfclient.module_path + "/ui/tabs/plotTab.ui")[0]
 
 
 class LogConfigModel(QAbstractItemModel):
@@ -60,6 +59,7 @@ class LogConfigModel(QAbstractItemModel):
     def add_block(self, block):
         self._nodes.append(block)
         self.layoutChanged.emit()
+        self._nodes.sort(key=lambda conf: conf.name.lower())
 
     def parent(self, index):
         """Re-implemented method to get the parent of the given index"""
@@ -67,7 +67,7 @@ class LogConfigModel(QAbstractItemModel):
 
     def remove_block(self, block):
         """Remove a block from the view"""
-        raise NotImplementedError()
+        self._nodes.remove(block)
 
     def columnCount(self, parent):
         """Re-implemented method to get the number of columns"""
@@ -99,7 +99,7 @@ class LogConfigModel(QAbstractItemModel):
         node = index.internalPointer()  # noqa
         if not index.isValid() or not 0 <= index.row() < len(self._nodes):
             return None
-        if role == Qt.DisplayRole:
+        if role == Qt.ItemDataRole.DisplayRole:
             return self._nodes[index.row()].name
         return None
 
@@ -112,7 +112,7 @@ class LogConfigModel(QAbstractItemModel):
         return self._nodes[i]
 
 
-class PlotTab(Tab, plot_tab_class):
+class PlotTab(TabToolbox, plot_tab_class):
     """Tab for plotting logging data"""
 
     _log_data_signal = pyqtSignal(int, object, object)
@@ -132,38 +132,33 @@ class PlotTab(Tab, plot_tab_class):
         (180, 60, 240),   # purple
     ]
 
-    def __init__(self, tabWidget, helper, *args):
-        super(PlotTab, self).__init__(*args)
+    def __init__(self, helper):
+        super(PlotTab, self).__init__(helper, 'Plotter')
         self.setupUi(self)
-
-        self.tabName = "Plotter"
-        self.menuName = "Plotter"
 
         self._log_error_signal.connect(self._logging_error)
 
         self._plot = PlotWidget(fps=30)
         # Check if we could find the PyQtImport. If not, then
         # set this tab as disabled
-        self.enabled = self._plot.can_enable
+        is_enabled = self._plot.can_enable
 
         self._model = LogConfigModel()
         self.dataSelector.setModel(self._model)
         self._log_data_signal.connect(self._log_data_received)
-        self.tabWidget = tabWidget
-        self.helper = helper
         self.plotLayout.addWidget(self._plot)
 
         # Connect external signals if we can use the tab
-        if self.enabled:
+        if is_enabled:
             self._disconnected_signal.connect(self._disconnected)
-            self.helper.cf.disconnected.add_callback(
+            self._helper.cf.disconnected.add_callback(
                 self._disconnected_signal.emit)
 
             self._connected_signal.connect(self._connected)
-            self.helper.cf.connected.add_callback(
+            self._helper.cf.connected.add_callback(
                 self._connected_signal.emit)
 
-            self.helper.cf.log.block_added_cb.add_callback(self._config_added)
+            self._helper.cf.log.block_added_cb.add_callback(self._config_added)
             self.dataSelector.currentIndexChanged.connect(
                 self._selection_changed)
 
@@ -244,6 +239,9 @@ class PlotTab(Tab, plot_tab_class):
         """Callback from the log layer when a new config has been added"""
         logger.debug("Callback for new config [%s]", logconfig.name)
         self._model.add_block(logconfig)
+
+    def remove_config(self, logconfig):
+        self._model.remove_block(logconfig)
 
     def _logging_error(self, log_conf, msg):
         """Callback from the log layer when an error occurs"""

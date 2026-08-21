@@ -32,26 +32,27 @@
 import sys
 
 import cflib.crtp
-from cflib.bootloader import Bootloader
-from cflib.bootloader.boottypes import BootVersion, TargetTypes
+from cflib.bootloader import Bootloader, Target
+from cflib.bootloader.boottypes import BootVersion
 
 
 def main():
     # Initialise the CRTP link driver
-    link = None
     try:
         cflib.crtp.init_drivers()
-        link = cflib.crtp.get_link_driver("radio://")
     except Exception as e:
         print("Error: {}".format(str(e)))
-        if link:
-            link.close()
         sys.exit(-1)
 
     # Set the default parameters
     clink = None
     action = "info"
     boot = "cold"
+    filename = None  # type: Optional[str]
+    targets = None  # type: Optional[List[Target]]
+    bl = None  # type: Optional[Bootloader]
+
+    exit_result = 0
 
     if len(sys.argv) < 2:
         print()
@@ -59,26 +60,26 @@ def main():
         print(" CrazyLoader Flash Utility")
         print("==============================")
         print()
-        print(" Usage:", sys.argv[0], "[CRTP options] <action> [parameters]")
+        print(" Usage:", sys.argv[0], "<action> [parameters] [CRTP options]")
         print()
-        print("The CRTP options are described above")
-        print()
-        print("Crazyload option:")
-        print("   info                    : Print the info of the bootloader "
-              "and quit.")
-        print("                             Will let the target in bootloader "
-              "mode")
-        print("   reset                   : Reset the device in firmware mode")
-        print("   flash <file> [targets]  : flash the <img> binary file from "
-              "the first")
-        print("                             possible  page in flash and reset "
-              "to firmware")
+        print("Actions:")
+        print("   info                    : Print the info of the bootloader and quit.")
+        print("                             Will leave the target in bootloader mode.")
+        print("   reset                   : Reset the device in firmware mode.")
+        print("   flash <file> [targets]  : flash the <img> binary file from the first")
+        print("                             possible page in flash and reset to firmware")
         print("                             mode.")
-        if link:
-            link.close()
+        print("                             Targets format: <target>-<type> or")
+        print("                             deck-<target>-<type>.")
+        print("                             Example: stm32-fw")
+        print()
+        print("CRTP options:")
+        print("   -c, --cold-boot         : Cold boot the Crazyflie (default). Restart")
+        print("                             Crazyflie to flash.")
+        print("   -w, --warm-boot <uri>   : Warm boot the Crazyflie with the given URI.")
         sys.exit(0)
 
-    # Analyse the command line parameters
+    # Parse command line parameters
     sys.argv = sys.argv[1:]
     argv = []
 
@@ -95,7 +96,7 @@ def main():
         i += 1
     sys.argv = argv
 
-    # Analyse the command
+    # Parse and check the command
     if len(sys.argv) < 1:
         action = "info"
     elif sys.argv[0] == "info":
@@ -103,81 +104,89 @@ def main():
     elif sys.argv[0] == "reset":
         action = "reset"
     elif sys.argv[0] == "flash":
-        # print len(sys.argv)
-        if len(sys.argv) < 2:
-            print("The flash action require a file name.")
-            link.close()
-            sys.exit(-1)
         action = "flash"
+
+        # Parse arguments
+        if len(sys.argv) < 2:
+            print("The flash action requires a file name.")
+            sys.exit(-1)
+
         filename = sys.argv[1]
-        targetnames = {}
+        targets = []  # List[Target]
         for t in sys.argv[2:]:
-            [target, type] = t.split("-")
-            if target in targetnames:
-                targetnames[target] += (type,)
+            if t.startswith("deck-"):
+                if t.count("-") != 2:
+                    print("Invalid deck target format '{}', expected deck-<target>-<type>".format(t))
+                    sys.exit(-1)
+                [deck, target, type] = t.split("-")
+                if not target or not type:
+                    print("Invalid deck target format '{}', expected deck-<target>-<type>".format(t))
+                    sys.exit(-1)
+                targets.append(Target("deck", target, type, [], []))
             else:
-                targetnames[target] = (type,)
+                if t.count("-") != 1:
+                    print("Invalid target format '{}', expected <target>-<type>".format(t))
+                    sys.exit(-1)
+                [target, type] = t.split("-")
+                if not target or not type:
+                    print("Invalid target format '{}', expected <target>-<type>".format(t))
+                    sys.exit(-1)
+                targets.append(Target("cf2", target, type, [], []))
+
+        # Check arguments
+        try:
+            with open(filename, 'rb') as f:
+                f.read(1)
+        except OSError as e:
+            print("Could not open file '{}': {}".format(filename, e))
+            sys.exit(-1)
+        is_target_required = not filename.endswith('.zip')
+        if (is_target_required and not targets):
+            print("The flash action with a non .zip file requires at least one target")
+            print("in the form <target>-<type> or deck-<target>-<type>.")
+            sys.exit(-1)
     else:
         print("Action", sys.argv[0], "unknown!")
-        link.close()
         sys.exit(-1)
-
-    # Currently there's two different targets available
-    targets = ()
 
     try:
         # Initialise the bootloader lib
         bl = Bootloader(clink)
 
-        #########################################
-        # Get the connection with the bootloader
-        #########################################
-        # The connection is done by reseting to the bootloader (default)
-        if boot == "reset":
-            print("Reset to bootloader mode ..."),
+        warm_boot = (boot == "reset")
+        if warm_boot:
+            print("Reset to bootloader mode ...")
             sys.stdout.flush()
-            if bl.start_bootloader(warm_boot=True):
-                print(" done!")
-            else:
-                print("Failed to warmboot")
-                bl.close()
-                sys.exit(-1)
         else:  # The connection is done by a cold boot ...
             print("Restart the Crazyflie you want to bootload in the next"),
             print(" 10 seconds ..."),
 
             sys.stdout.flush()
-            if bl.start_bootloader(warm_boot=False):
-                print(" done!")
-            else:
-                print("Cannot connect the bootloader!")
-                bl.close()
-                sys.exit(-1)
-
-        print("Connected to bootloader on {} (version=0x{:X})".format(
-            BootVersion.to_ver_string(bl.protocol_version),
-            bl.protocol_version))
-
-        if bl.protocol_version == BootVersion.CF2_PROTO_VER:
-            targets += (bl.get_target(TargetTypes.NRF51),)
-        targets += (bl.get_target(TargetTypes.STM32),)
 
         ######################################
         # Doing something (hopefully) useful
         ######################################
 
-        # Print information about the targets
-        for target in targets:
-            print(target)
         if action == "info":
-            None  # Already done ...
-        elif action == "reset":
-            print
-            print("Reset in firmware mode ...")
-            bl.reset_to_firmware()
+            def print_info(version: int, connected_targets: [Target]):
+                print("Connected to bootloader on {} (version=0x{:X})".format(
+                    BootVersion.to_ver_string(version),
+                    version
+                    )
+                )
+                for target in connected_targets:
+                    print(target)
+
+            # flash_full called with no filename will not flash, just call
+            # our info callback
+            bl.flash_full(None, None, warm_boot, None, print_info)
         elif action == "flash":
-            bl.flash(filename, targetnames)
-            print("Reset in firmware mode ...")
+            try:
+                bl.flash_full(None, filename, warm_boot, targets)
+            except Exception as e:
+                print("Failed to flash: {}".format(e))
+                exit_result = -1
+        elif action == "reset":
             bl.reset_to_firmware()
         else:
             None
@@ -186,6 +195,7 @@ def main():
 
         traceback.print_exc(file=sys.stdout)
         print(e)
+        exit_result = -1
 
     finally:
         #########################
@@ -193,3 +203,5 @@ def main():
         #########################
         if bl:
             bl.close()
+
+    sys.exit(exit_result)

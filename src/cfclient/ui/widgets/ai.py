@@ -7,7 +7,7 @@
 #  +------+    / /_/ / / /_/ /__/ /  / /_/ / / /_/  __/
 #   ||  ||    /_____/_/\__/\___/_/   \__,_/ /___/\___/
 #
-#  Copyright (C) 2011-2013 Bitcraze AB
+#  Copyright (C) 2011-2026 Bitcraze AB
 #
 #  Crazyflie Nano Quadcopter Client
 #
@@ -31,8 +31,9 @@ Attitude indicator widget.
 
 import sys
 
-from PyQt5 import QtGui
-from PyQt5 import QtWidgets, QtCore
+from PyQt6 import QtGui
+from PyQt6 import QtWidgets
+from PyQt6.QtCore import Qt
 
 __author__ = 'Bitcraze AB'
 __all__ = ['AttitudeIndicator']
@@ -95,81 +96,78 @@ class AttitudeIndicator(QtWidgets.QWidget):
         qp.rotate(self.roll)
         qp.translate(0, (self.pitch * h) / 50)
         qp.translate(-w / 2, -h / 2)
-        qp.setRenderHint(qp.Antialiasing)
+        qp.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing)
 
-        font = QtGui.QFont('Serif', 7, QtGui.QFont.Light)
+        font = QtGui.QFont('Serif', 7, QtGui.QFont.Weight.Light)
         qp.setFont(font)
 
         # Draw the blue
         qp.setPen(QtGui.QColor(0, 61, 144))
         qp.setBrush(QtGui.QColor(0, 61, 144))
-        qp.drawRect(-w, h / 2, 3 * w, -3 * h)
+        qp.drawRect(-w, int(h / 2), 3 * w, -3 * h)
 
         # Draw the marron
         qp.setPen(QtGui.QColor(59, 41, 39))
         qp.setBrush(QtGui.QColor(59, 41, 39))
-        qp.drawRect(-w, h / 2, 3 * w, 3 * h)
+        qp.drawRect(-w, int(h / 2), 3 * w, 3 * h)
 
-        pen = QtGui.QPen(QtGui.QColor(255, 255, 255), 1.5,
-                         QtCore.Qt.SolidLine)
+        pen = QtGui.QPen(QtGui.QColor(255, 255, 255), 1.5, Qt.PenStyle.SolidLine)
         qp.setPen(pen)
-        qp.drawLine(-w, h / 2, 3 * w, h / 2)
+        qp.drawLine(-w, int(h / 2), 3 * w, int(h / 2))
 
         # Drawing pitch lines
         for ofset in [-180, 0, 180]:
             for i in range(-900, 900, 25):
-                pos = (((i / 10.0) + 25 + ofset) * h / 50.0)
+                pos = int((((i / 10.0) + 25 + ofset) * h / 50.0))
                 if i % 100 == 0:
                     length = 0.35 * w
                     if i != 0:
                         if ofset == 0:
-                            qp.drawText((w / 2) + (length / 2) + (w * 0.06),
+                            qp.drawText(int((w / 2) + (length / 2) + (w * 0.06)),
                                         pos, "{}".format(-i / 10))
-                            qp.drawText((w / 2) - (length / 2) - (w * 0.08),
+                            qp.drawText(int((w / 2) - (length / 2) - (w * 0.08)),
                                         pos, "{}".format(-i / 10))
                         else:
-                            qp.drawText((w / 2) + (length / 2) + (w * 0.06),
+                            qp.drawText(int((w / 2) + (length / 2) + (w * 0.06)),
                                         pos, "{}".format(i / 10))
-                            qp.drawText((w / 2) - (length / 2) - (w * 0.08),
+                            qp.drawText(int((w / 2) - (length / 2) - (w * 0.08)),
                                         pos, "{}".format(i / 10))
                 elif i % 50 == 0:
                     length = 0.2 * w
                 else:
                     length = 0.1 * w
 
-                qp.drawLine((w / 2) - (length / 2), pos,
-                            (w / 2) + (length / 2), pos)
+                qp.drawLine(int((w / 2) - (length / 2)), pos,
+                            int((w / 2) + (length / 2)), pos)
 
         qp.setWorldMatrixEnabled(False)
 
-        pen = QtGui.QPen(QtGui.QColor(0, 0, 0), 2,
-                         QtCore.Qt.SolidLine)
+        pen = QtGui.QPen(QtGui.QColor(0, 0, 0), 2, Qt.PenStyle.SolidLine)
         qp.setBrush(QtGui.QColor(0, 0, 0))
         qp.setPen(pen)
-        qp.drawLine(0, h / 2, w, h / 2)
+        qp.drawLine(0, int(h / 2), w, int(h / 2))
 
         # Draw Hover vs Target
 
         qp.setWorldMatrixEnabled(False)
 
-        pen = QtGui.QPen(QtGui.QColor(255, 255, 255), 2,
-                         QtCore.Qt.SolidLine)
+        pen = QtGui.QPen(QtGui.QColor(255, 255, 255), 2, Qt.PenStyle.SolidLine)
         qp.setBrush(QtGui.QColor(255, 255, 255))
         qp.setPen(pen)
-        fh = max(7, h / 50)
-        font = QtGui.QFont('Sans', fh, QtGui.QFont.Light)
+        fh = int(max(7, h / 50))
+        font = QtGui.QFont('Sans', fh, QtGui.QFont.Weight.Light)
         qp.setFont(font)
         qp.resetTransform()
 
         qp.translate(0, h / 2)
         if not self.hover:
             # height
-            qp.drawText(w - fh * 10, fh / 2, str(round(self.hoverHeight, 2)))
+            qp.drawText(w - fh * 10, int(fh / 2), str(round(self.hoverHeight, 2)))
 
         if self.hover:
             # target height (center)
             qp.drawText(
-                w - fh * 10, fh / 2, str(round(self.hoverTargetHeight, 2)))
+                w - fh * 10, int(fh / 2), str(round(self.hoverTargetHeight, 2)))
             diff = round(self.hoverHeight - self.hoverTargetHeight, 2)
             pos_y = -h / 6 * diff
 
@@ -182,13 +180,13 @@ class AttitudeIndicator(QtWidgets.QWidget):
                 pos_y = -h / 6 * diff
 
             # difference from target (moves up and down +- 2.8m)
-            qp.drawText(w - fh * 3.8, pos_y + fh / 2, str(diff))
+            qp.drawText(int(w - fh * 3.8), int(pos_y + fh / 2), str(diff))
             # vertical line
-            qp.drawLine(w - fh * 4.5, 0, w - fh * 4.5, pos_y)
+            qp.drawLine(int(w - fh * 4.5), 0, int(w - fh * 4.5), int(pos_y))
             # left horizontal line
-            qp.drawLine(w - fh * 4.7, 0, w - fh * 4.5, 0)
+            qp.drawLine(int(w - fh * 4.7), 0, int(w - fh * 4.5), 0)
             # right horizontal line
-            qp.drawLine(w - fh * 4.2, pos_y, w - fh * 4.5, pos_y)
+            qp.drawLine(int(w - fh * 4.2), int(pos_y), int(w - fh * 4.5), int(pos_y))
 
 
 if __name__ == "__main__":
@@ -214,8 +212,8 @@ if __name__ == "__main__":
         def initUI(self):
             vbox = QtWidgets.QVBoxLayout()
 
-            sld = QtWidgets.QSlider(QtCore.Qt.Horizontal, self)
-            sld.setFocusPolicy(QtCore.Qt.NoFocus)
+            sld = QtWidgets.QSlider(Qt.Orientation.Horizontal, self)
+            sld.setFocusPolicy(Qt.FocusPolicy.NoFocus)
             sld.setRange(0, 3600)
             sld.setValue(1800)
             vbox.addWidget(sld)
@@ -228,21 +226,21 @@ if __name__ == "__main__":
             hbox = QtWidgets.QHBoxLayout()
             hbox.addLayout(vbox)
 
-            sldPitch = QtWidgets.QSlider(QtCore.Qt.Vertical, self)
-            sldPitch.setFocusPolicy(QtCore.Qt.NoFocus)
+            sldPitch = QtWidgets.QSlider(Qt.Orientation.Vertical, self)
+            sldPitch.setFocusPolicy(Qt.FocusPolicy.NoFocus)
             sldPitch.setRange(0, 180)
             sldPitch.setValue(90)
             sldPitch.valueChanged[int].connect(self.updatePitch)
             hbox.addWidget(sldPitch)
 
-            sldHeight = QtWidgets.QSlider(QtCore.Qt.Vertical, self)
-            sldHeight.setFocusPolicy(QtCore.Qt.NoFocus)
+            sldHeight = QtWidgets.QSlider(Qt.Orientation.Vertical, self)
+            sldHeight.setFocusPolicy(Qt.FocusPolicy.NoFocus)
             sldHeight.setRange(-200, 200)
             sldHeight.setValue(0)
             sldHeight.valueChanged[int].connect(self.updateBaro)
 
-            sldT = QtWidgets.QSlider(QtCore.Qt.Vertical, self)
-            sldT.setFocusPolicy(QtCore.Qt.NoFocus)
+            sldT = QtWidgets.QSlider(Qt.Orientation.Vertical, self)
+            sldT.setFocusPolicy(Qt.FocusPolicy.NoFocus)
             sldT.setRange(-200, 200)
             sldT.setValue(0)
             sldT.valueChanged[int].connect(self.updateTarget)
@@ -263,7 +261,7 @@ if __name__ == "__main__":
     def main():
         app = QtWidgets.QApplication(sys.argv)
         Example()
-        sys.exit(app.exec_())
+        sys.exit(app.exec())
 
     if __name__ == '__main__':
         main()
